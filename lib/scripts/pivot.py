@@ -1830,8 +1830,33 @@ Do-Delete
             r = self.http_post(url, json_data=body)
 
             logger.info(f"[+] Script with guid {self.guid} executed.")
-            json_result = r.json()
-            self.opid = (json_result['value'])
+            if r.status_code not in (200, 201, 202, 204):
+                logger.info(f"[-] RunScript failed with HTTP {r.status_code}")
+                logger.debug(f"RunScript response body: {r.text}")
+                return
+
+            response_text = (r.text or "").strip()
+            if r.status_code == 204 or response_text == "":
+                logger.info("[*] RunScript returned no body; unable to parse OperationId from response.")
+                logger.info("[*] Script may still have executed. Check script status/results manually in AdminService.")
+                return
+
+            try:
+                json_result = r.json()
+                self.opid = json_result.get('value')
+            except ValueError:
+                if response_text.isdigit():
+                    self.opid = response_text
+                else:
+                    logger.info("[*] RunScript returned non-JSON response; unable to parse OperationId.")
+                    logger.debug(f"RunScript response body: {r.text}")
+                    return
+
+            if not self.opid:
+                logger.info("[*] RunScript response did not contain an OperationId.")
+                logger.debug(f"RunScript response body: {r.text}")
+                return
+
             logger.debug(f"[+] Got OperationID: {self.opid}")
             result = self.get_results()
             if result:

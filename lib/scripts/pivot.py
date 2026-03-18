@@ -1737,17 +1737,48 @@ Do-Delete
                     continue
                 logger.info("[+] Got result:")
                 data = r.json()
-                output = data['value']['Result'][0]
-                result = output['ScriptOutput']
-                result = result.replace('["', '')\
-                    .replace('"]','')\
-                    .replace(r"\u003e", ">")\
-                    .replace(r"\r\n", "\n")\
-                    .replace('","', "\n")\
-                    .replace(',"', "\n")
-                formatted_text = "\n".join(line.strip() for line in result.split(r"\n"))
-                logger.info(formatted_text)
-                self.printlog(formatted_text)
+                results = data.get('value', {}).get('Result', [])
+                if not results:
+                    logger.info("[*] ScriptResult returned no result rows.")
+                    logger.debug(f"ScriptResult response body: {r.text}")
+                    return False
+
+                output = results[0]
+                script_output = output.get('ScriptOutput', '')
+                script_error = output.get('ScriptError', '')
+                if script_error:
+                    logger.info(f"[*] ScriptError: {script_error}")
+
+                formatted_text = ''
+                if isinstance(script_output, list):
+                    formatted_text = "\n".join(str(line).strip() for line in script_output if str(line).strip())
+                elif isinstance(script_output, str):
+                    raw_output = script_output.strip()
+                    if raw_output:
+                        try:
+                            parsed_output = json.loads(raw_output)
+                            if isinstance(parsed_output, list):
+                                formatted_text = "\n".join(
+                                    str(line).strip() for line in parsed_output if str(line).strip()
+                                )
+                            else:
+                                formatted_text = str(parsed_output).strip()
+                        except ValueError:
+                            cleaned_output = script_output.replace(r"\u003e", ">").replace(r"\r\n", "\n")
+                            formatted_text = "\n".join(
+                                line.strip() for line in cleaned_output.splitlines() if line.strip()
+                            )
+
+                if not formatted_text.strip():
+                    if isinstance(script_output, str) and script_output.strip():
+                        logger.info("[*] Parsed output was empty. Showing raw ScriptOutput:")
+                        logger.info(script_output)
+                        self.printlog(script_output)
+                    else:
+                        logger.info("[*] Script returned empty output.")
+                else:
+                    logger.info(formatted_text)
+                    self.printlog(formatted_text)
                 return True
             except Exception as e:
                 logger.info(e)

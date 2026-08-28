@@ -349,12 +349,14 @@ class SMB:
             if pxe_boot_servers:
                 self.smb_spider(conn, pxe_boot_servers)
             return signing, site_code, siteserv, distp, wsus, wdspxe, sccmpxe
-        except socket.error:
-            logger.info(socket.error)
-            return
         except Exception as e:
+            # A timed-out/dropped connection shouldn't be reported the same
+            # as a verified "not present" -- callers unpack this tuple
+            # unconditionally, so return an explicit unknown/failed state
+            # rather than None (which used to crash every caller) or False
+            # (which would misrepresent a timeout as a checked negative).
             logger.info(f"[-] {e}")
-            return
+            return None, 'None', None, None, None, None, None
 
     #if a distribution point is found with this directory
     #spider and search for pxeboot variables files

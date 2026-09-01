@@ -48,8 +48,10 @@ def get_machine_name(domain_controller, domain):
             raise Exception('Error while anonymous logging into %s' % domain)
         return srv_name
     else:
-        s.logoff()
-    return s.getServerName()
+        return s.getServerName()
+    finally:
+        s.close()
+
 
 def init_ldap_connection(target, tls_version, domain, username, password, lmhash, nthash, domain_controller, kerberos, hashes, aesKey, use_channel_binding, signing=False):
     if signing:
